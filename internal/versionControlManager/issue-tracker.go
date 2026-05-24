@@ -1,6 +1,6 @@
-package cmd
+package versionControlManager
 
-import(
+import (
 	"os/exec"
 )
 
@@ -8,7 +8,7 @@ type IssueTracker interface {
 	GetIssueText(issueNumber string) (string, error)
 }
 
-type GithubAdapter struct {}
+type GithubAdapter struct{}
 
 func (gha *GithubAdapter) GetIssueText(issueNumber string) (string, error) {
 	cmdObj := exec.Command("gh", "issue", "view", issueNumber, "--json", "body", "--jq", ".body")
