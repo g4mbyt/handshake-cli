@@ -3,6 +3,8 @@ package tuiManager
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -42,8 +44,17 @@ type followUpReadyMsg struct {
 	err    error
 }
 
+type reviewFocus int
+
+const (
+	focusReview reviewFocus = iota
+	focusChat
+	focusInput
+)
+
 type ReviewModel struct {
 	state    reviewState
+	focus    reviewFocus
 	spinner  spinner.Model
 	provider string
 	prompts  *promptManager.Prompts
@@ -75,6 +86,7 @@ func NewReviewModel(gitDiff, provider string, prompts *promptManager.Prompts) Re
 
 	return ReviewModel{
 		state:    reviewStateLoading,
+		focus:    focusInput,
 		spinner:  sp,
 		provider: provider,
 		prompts:  prompts,
@@ -201,7 +213,18 @@ func (m ReviewModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancel()
 			return m, tea.Quit
 
+		case "tab":
+			m.focus = (m.focus + 1) % 3
+			if m.focus == focusInput {
+				return m, m.input.Focus()
+			}
+			m.input.Blur()
+			return m, nil
+
 		case "enter":
+			if m.focus != focusInput {
+				return m, nil
+			}
 			question := strings.TrimSpace(m.input.Value())
 			if question == "" {
 				return m, nil
@@ -220,13 +243,17 @@ func (m ReviewModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.spinner.Tick,
 				fetchFollowUpCmd(ctx, m.gitDiff, m.aiReview, m.chatLog, question, m.provider, m.prompts),
 			)
-		case "tab":
 		}
 	}
 
-	m.reviewVP, reviewCmd = m.reviewVP.Update(msg)
-	m.chatVP, chatCmd = m.chatVP.Update(msg)
-	m.input, inputCmd = m.input.Update(msg)
+	switch m.focus {
+	case focusReview:
+		m.reviewVP, reviewCmd = m.reviewVP.Update(msg)
+	case focusChat:
+		m.chatVP, chatCmd = m.chatVP.Update(msg)
+	case focusInput:
+		m.input, inputCmd = m.input.Update(msg)
+	}
 
 	return m, tea.Batch(reviewCmd, chatCmd, inputCmd)
 }
@@ -245,7 +272,7 @@ func (m ReviewModel) View() string {
 	switch m.state {
 	case reviewStateLoading:
 		label := spinnerLabelStyle.Render(
-			fmt.Sprintf("%s Fetching AI review via %s…", m.spinner.View(), m.provider),
+			fmt.Sprintf("%s Fetching context & AI review via %s…", m.spinner.View(), m.provider),
 		)
 		return appBox.Render(lipgloss.JoinVertical(lipgloss.Left,
 			logoStyle.Render("HANDSHAKE"),
@@ -277,10 +304,15 @@ func (m ReviewModel) viewChat() string {
 		Padding(1, 2).
 		Width(panelW)
 
+	reviewBorder := darkBlue
+	if m.focus == focusReview {
+		reviewBorder = accentBlue
+	}
+
 	reviewPanel := panelStyle.
-		BorderForeground(darkBlue).
+		BorderForeground(reviewBorder).
 		Render(lipgloss.JoinVertical(lipgloss.Left,
-			subtitleStyle.Render("AI Review  ↑/↓ to scroll"),
+			subtitleStyle.Foreground(reviewBorder).Render("AI Review  ↑/↓ to scroll"),
 			m.reviewVP.View(),
 		))
 
@@ -293,13 +325,22 @@ func (m ReviewModel) viewChat() string {
 		inputArea = m.input.View()
 	}
 
+	chatBorder := primaryBlue
+	if m.focus == focusChat {
+		chatBorder = accentBlue
+	} else if m.focus == focusInput {
+		chatBorder = primaryBlue
+	} else {
+		chatBorder = darkBlue
+	}
+
 	chatPanel := panelStyle.
-		BorderForeground(primaryBlue).
+		BorderForeground(chatBorder).
 		Render(lipgloss.JoinVertical(lipgloss.Left,
-			subtitleStyle.Render("Chat  ↑/↓ to scroll"),
+			subtitleStyle.Foreground(chatBorder).Render("Chat  ↑/↓ to scroll"),
 			m.chatVP.View(),
 			inputArea,
-			helpStyle.Render("enter: send  •  esc: quit"),
+			helpStyle.Render("tab: switch focus  •  enter: send  •  esc: quit"),
 		))
 
 	return appBox.Render(lipgloss.JoinVertical(lipgloss.Left,
@@ -324,7 +365,23 @@ func fetchReviewCmd(ctx context.Context, gitDiff, provider string, prompts *prom
 			return reviewReadyMsg{err: fmt.Errorf("failed to initialise %q: %w", provider, err)}
 		}
 
-		review, err := ai.ReviewCode(ctx, gitDiff)
+		emb, err := aiManager.GetEmbedding(gitDiff)
+		if err != nil {
+			review, err := ai.ReviewCode(ctx, gitDiff, "No historical context available (embedding failed).")
+			if err != nil {
+				return reviewReadyMsg{err: err}
+			}
+			return reviewReadyMsg{review: review}
+		}
+
+		cwd, _ := os.Getwd()
+		projectName := filepath.Base(cwd)
+		history, err := aiManager.SearchSimilarHistory(emb, projectName, 3)
+		if err != nil {
+			history = "No historical context found or search failed."
+		}
+
+		review, err := ai.ReviewCode(ctx, gitDiff, history)
 		if err != nil {
 			if ctx.Err() != nil {
 				return reviewReadyMsg{err: fmt.Errorf("cancelled")}
@@ -354,7 +411,7 @@ func fetchFollowUpCmd(ctx context.Context, gitDiff, aiReview string, chatLog []s
 		}
 		sb.WriteString("\nAnswer the developer's latest question concisely and precisely.")
 
-		answer, err := ai.ReviewCode(ctx, sb.String())
+		answer, err := ai.ReviewCode(ctx, sb.String(), "Follow-up question context.")
 		if err != nil {
 			if ctx.Err() != nil {
 				return followUpReadyMsg{err: fmt.Errorf("cancelled")}

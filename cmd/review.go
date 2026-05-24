@@ -21,7 +21,7 @@ var reviewProviderFlag string
 
 func init() {
 	rootCmd.AddCommand(reviewCmd)
-	reviewCmd.Flags().StringVarP(&reviewProviderFlag, "provider", "p", "openrouter", "AI provider to use (openrouter, ollama)")
+	reviewCmd.Flags().StringVarP(&reviewProviderFlag, "provider", "p", "ollama", "AI provider to use (openrouter, ollama)")
 }
 
 func runReview(_ *cobra.Command, _ []string) error {

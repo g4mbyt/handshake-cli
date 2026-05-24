@@ -244,7 +244,7 @@ func (m DashboardModel) updateResult(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func runVectorizeCmd() tea.Cmd {
 	return func() tea.Msg {
-		result, err := aiManager.RunVectorizeJob(func(_ string) {})
+		result, err := aiManager.RunVectorizeJob()
 		return jobFinishedMsg{result: result, kind: "vectorize", err: err}
 	}
 }

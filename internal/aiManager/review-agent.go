@@ -11,7 +11,7 @@ import (
 
 type AIProvider interface {
 	AnalyzeCoverage(ctx context.Context, issueText string, gitDiff string) (string, error)
-	ReviewCode(ctx context.Context, gitDiff string) (string, error)
+	ReviewCode(ctx context.Context, gitDiff string, historicalContext string) (string, error)
 }
 
 type OpenRouterAdapter struct {
@@ -48,8 +48,8 @@ func (ora *OpenRouterAdapter) AnalyzeCoverage(ctx context.Context, issueText str
 	return callOpenAICompatible(ctx, ora.client, ora.model, ora.prompts.CoverageSystem, userPrompt)
 }
 
-func (ora *OpenRouterAdapter) ReviewCode(ctx context.Context, gitDiff string) (string, error) {
-	userPrompt := fmt.Sprintf(ora.prompts.ReviewUser, gitDiff)
+func (ora *OpenRouterAdapter) ReviewCode(ctx context.Context, gitDiff string, historicalContext string) (string, error) {
+	userPrompt := fmt.Sprintf(ora.prompts.ReviewUser, gitDiff, historicalContext)
 	return callOpenAICompatible(ctx, ora.client, ora.model, ora.prompts.ReviewSystem, userPrompt)
 }
 
@@ -85,8 +85,8 @@ func (ola *OllamaAdapter) AnalyzeCoverage(ctx context.Context, issueText string,
 	return callOpenAICompatible(ctx, ola.client, ola.model, ola.prompts.CoverageSystem, userPrompt)
 }
 
-func (ola *OllamaAdapter) ReviewCode(ctx context.Context, gitDiff string) (string, error) {
-	userPrompt := fmt.Sprintf(ola.prompts.ReviewUser, gitDiff)
+func (ola *OllamaAdapter) ReviewCode(ctx context.Context, gitDiff string, historicalContext string) (string, error) {
+	userPrompt := fmt.Sprintf(ola.prompts.ReviewUser, gitDiff, historicalContext)
 	return callOpenAICompatible(ctx, ola.client, ola.model, ola.prompts.ReviewSystem, userPrompt)
 }
 

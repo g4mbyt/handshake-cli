@@ -2,31 +2,31 @@ package cmd
 
 import (
 	"fmt"
-	"handshake-cli/internal/aiManager"
 	"handshake-cli/internal/promptManager"
-	"handshake-cli/internal/versionControlManager"
+	"handshake-cli/internal/tuiManager"
 	"os/exec"
 	"regexp"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 )
 
 var coverageCmd = &cobra.Command{
 	Use: "coverage",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if !checkDependencies() {
-			return nil
+		if err := checkDependencies(); err != nil {
+			return err
 		}
 
-		issueBody := getIssueBody()
-		if issueBody == "" {
-			return nil
+		issueBody, err := getIssueBody()
+		if err != nil {
+			return err
 		}
 
-		gitDiff := getGitDiff()
-		if gitDiff == "" {
-			return nil
+		gitDiff, err := getGitDiff()
+		if err != nil {
+			return err
 		}
 
 		prompts, err := promptManager.LoadPrompts()
@@ -34,26 +34,12 @@ var coverageCmd = &cobra.Command{
 			return fmt.Errorf("error loading prompts: %v", err)
 		}
 
-		var provider aiManager.AIProvider
-		switch coverageProviderFlag {
-		case "ollama":
-			provider, err = aiManager.NewOllamaAdapter("qwen2.5-coder:1.5b", "", prompts)
-		default:
-			provider, err = aiManager.NewOpenRouterAdapter("google/gemini-2.5-pro", prompts)
+		model := tuiManager.NewCoverageModel(issueBody, gitDiff, coverageProviderFlag, prompts)
+		p := tea.NewProgram(model, tea.WithAltScreen())
+		if _, err := p.Run(); err != nil {
+			return fmt.Errorf("UI error: %w", err)
 		}
 
-		if err != nil {
-			return fmt.Errorf("error initializing AI provider: %v", err)
-		}
-
-		fmt.Println("Analyzing requirements coverage...")
-		coverage, err := provider.AnalyzeCoverage(cmd.Context(), issueBody, gitDiff)
-		if err != nil {
-			return fmt.Errorf("error analyzing coverage: %v", err)
-		}
-
-		fmt.Println("\n=== Requirements Coverage Report ===")
-		fmt.Println(coverage)
 		return nil
 	},
 }
@@ -61,22 +47,18 @@ var coverageCmd = &cobra.Command{
 var coverageProviderFlag string
 var issueFlag string
 
-func checkDependencies() bool {
+func checkDependencies() error {
 	_, err := exec.LookPath("gh")
 	if err != nil {
-		fmt.Println("⚠️  Warning: GitHub CLI ('gh') is not installed or is not found in your PATH.")
-		fmt.Println("Skipping Requirements Coverage analysis. Install 'gh' to enable this feature.")
-		return false
+		return fmt.Errorf("GitHub CLI ('gh') is not installed or not found in PATH")
 	}
 
 	_, err = exec.LookPath("git")
 	if err != nil {
-		fmt.Println("⚠️  Warning: Git('git') is not installed or is not found in your PATH.")
-		fmt.Println("Skipping Requirements Coverage analysis. Install 'git' to enable this feature.")
-		return false
+		return fmt.Errorf("Git ('git') is not installed or not found in PATH")
 	}
 
-	return true
+	return nil
 }
 
 func extractIssueNumber(branchName string) string {
@@ -103,7 +85,7 @@ func extractIssueNumber(branchName string) string {
 	return ""
 }
 
-func getIssueBody() string {
+func getIssueBody() (string, error) {
 	var issueNumber string
 	if issueFlag != "" {
 		issueNumber = issueFlag
@@ -112,8 +94,7 @@ func getIssueBody() string {
 		outputBytes, err := currentBranch.Output()
 
 		if err != nil {
-			fmt.Println("Error: Failed to get git branch. Are you in a git repository?")
-			return ""
+			return "", fmt.Errorf("failed to get git branch")
 		}
 
 		rawString := string(outputBytes)
@@ -122,27 +103,22 @@ func getIssueBody() string {
 	}
 
 	if issueNumber == "" {
-		fmt.Println("No issue number found in branch name. Please provide it via --issue flag.")
-		return ""
+		return "", fmt.Errorf("no issue number found in branch name")
 	}
 
-	var tracker versionControlManager.IssueTracker = &versionControlManager.GithubAdapter{}
-	issuetext, err := tracker.GetIssueText(issueNumber)
-
+	outputBytes, err := exec.Command("gh", "issue", "view", issueNumber, "--json", "body", "--jq", ".body").Output()
 	if err != nil {
-		fmt.Printf("Error fetching issue text: %v\n", err)
-		return ""
+		return "", fmt.Errorf("error fetching issue text from GitHub")
 	}
 
-	return issuetext
+	return string(outputBytes), nil
 }
 
-func getGitDiff() string {
+func getGitDiff() (string, error) {
 	diffCmd := exec.Command("git", "diff", "--staged")
 	diffBytes, err := diffCmd.Output()
 	if err != nil {
-		fmt.Println("Error reading git diff")
-		return ""
+		return "", fmt.Errorf("error reading git diff")
 	}
 	gitDiff := string(diffBytes)
 
@@ -150,22 +126,20 @@ func getGitDiff() string {
 		diffCmd = exec.Command("git", "diff")
 		diffBytes, err = diffCmd.Output()
 		if err != nil {
-			fmt.Println("Error reading git diff")
-			return ""
+			return "", fmt.Errorf("error reading git diff")
 		}
 		gitDiff = string(diffBytes)
 	}
 
 	if gitDiff == "" {
-		fmt.Println("No code changes found! Write some code before running coverage.")
-		return ""
+		return "", fmt.Errorf("no code changes found")
 	}
 
-	return gitDiff
+	return gitDiff, nil
 }
 
 func init() {
 	rootCmd.AddCommand(coverageCmd)
-	coverageCmd.Flags().StringVarP(&coverageProviderFlag, "provider", "p", "openrouter", "AI provider to use (openrouter, ollama)")
+	coverageCmd.Flags().StringVarP(&coverageProviderFlag, "provider", "p", "ollama", "AI provider to use (openrouter, ollama)")
 	coverageCmd.Flags().StringVar(&issueFlag, "issue", "", "Issue number to analyze against (e.g. 123)")
 }
